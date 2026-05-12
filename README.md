@@ -4,8 +4,8 @@ A small, opinionated image picker for Android: camera + system Photo Picker,
 single or multi-select, optional cropping, EXIF-correct rotation, automatic
 downscale + JPEG compression off the main thread.
 
-- Works in **Activities and Fragments** (registers against the right lifecycle for each).
-- **Survives process death** while the camera is open (`SavedStateRegistry`).
+- Works in **Activities, Fragments, and Compose** (registers against the right lifecycle for each).
+- **Survives process death** while the camera is open (`SavedStateRegistry` on the View side; `rememberSaveable` on the Compose side).
 - One class, no inheritance, no boilerplate.
 - Returns ready-to-upload `Uri`s in your app's `cacheDir`.
 - Uses the modern Photo Picker (no `READ_MEDIA_IMAGES` permission needed).
@@ -126,6 +126,48 @@ class ProfileFragment : Fragment(R.layout.fragment_profile) {
 > host reaches the STARTED state. Internally it calls
 > `registerForActivityResult` and `SavedStateRegistry.registerSavedStateProvider`,
 > both of which require that.
+
+## Usage — Compose
+
+```kotlin
+@Composable
+fun EditProfileScreen(onSaved: (Uri) -> Unit) {
+    val context = LocalContext.current
+    val picker = rememberImagePicker(
+        authority = "${context.packageName}.provider",
+        // Optional cropping — drop this line to skip crop.
+        config = ImagePickerConfig(cropHandler = UCropHandler()),
+        onPicked = { uri -> onSaved(uri) },
+    )
+
+    Row {
+        Button(onClick = { picker.captureImage() }) { Text("Camera") }
+        Button(onClick = { picker.uploadImage() }) { Text("Gallery") }
+    }
+}
+```
+
+Multi-pick in Compose:
+
+```kotlin
+var loading by remember { mutableStateOf(false) }
+val picker = rememberImagePicker(
+    authority = "${context.packageName}.provider",
+    config = ImagePickerConfig(onLoadingChanged = { loading = it }),
+    onMultiPicked = { uris -> viewModel.addImages(uris) },
+)
+
+Button(onClick = { picker.pickMultipleImages(maxItems = 5) }) {
+    Text(if (loading) "Compressing…" else "Add up to 5")
+}
+```
+
+Result launchers registered inside `rememberImagePicker` are scoped to the
+current composition, so they're released automatically when the composable
+leaves the tree. `tempCameraUri` is stored in `rememberSaveable`, so the
+camera result survives configuration changes **and** process death — no manual
+`stateKey` needed, and you can call `rememberImagePicker` multiple times in the
+same screen without collision.
 
 ## Usage — multiple images
 

@@ -4,9 +4,6 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -21,7 +18,6 @@ import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVis
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
-import androidx.exifinterface.media.ExifInterface
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
@@ -31,8 +27,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
-import kotlin.math.max
 
 /**
  * Single + multi image picker with:
@@ -136,6 +130,7 @@ class ImagePickerManager private constructor(
     )
 
     private val context: Context get() = contextProvider()
+    private val processor: ImageProcessor by lazy { ImageProcessor(context) }
 
     private var tempCameraUri: Uri? = null
     private var isProcessing = false
@@ -205,7 +200,7 @@ class ImagePickerManager private constructor(
             config.onLoadingChanged?.invoke(true)
             lifecycleOwner.lifecycleScope.launch {
                 val processed = withContext(Dispatchers.IO) {
-                    capped.mapNotNull { runCatching { processSync(it) }.getOrNull() }
+                    capped.mapNotNull { runCatching { processor.process(it, config) }.getOrNull() }
                 }
                 config.onLoadingChanged?.invoke(false)
                 multiCallback?.invoke(processed)
@@ -301,7 +296,7 @@ class ImagePickerManager private constructor(
     private fun compressAndReturnImage(uri: Uri) {
         lifecycleOwner.lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { processSync(uri) }.getOrElse {
+                runCatching { processor.process(uri, config) }.getOrElse {
                     config.onError?.invoke(it)
                     uri
                 }
@@ -309,89 +304,6 @@ class ImagePickerManager private constructor(
             callback?.invoke(result)
             isProcessing = false
         }
-    }
-
-    /**
-     * Decode → EXIF-rotate → downscale → JPEG-encode into the app cache dir.
-     * Called on a background dispatcher. Returns the original uri if
-     * [Config.compress] is false.
-     */
-    private fun processSync(uri: Uri): Uri {
-        if (!config.compress) return uri
-        val ctx = context
-        val resolver = ctx.contentResolver
-
-        // First pass — get raw dimensions without allocating pixels.
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, bounds)
-        }
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            error("Could not decode image bounds for $uri")
-        }
-
-        val decodeOpts = BitmapFactory.Options().apply {
-            inSampleSize = calcInSampleSize(bounds.outWidth, bounds.outHeight, config.maxEdgePx)
-        }
-        val sampled = resolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, decodeOpts)
-        } ?: error("Could not decode image for $uri")
-
-        val rotation = readExifRotation(uri)
-        val scaled = scaleToMaxEdge(sampled, config.maxEdgePx)
-        val oriented = applyRotation(scaled, rotation)
-
-        val outFile = File(ctx.cacheDir, "compressed_${System.currentTimeMillis()}.jpg")
-        FileOutputStream(outFile).use { out ->
-            oriented.compress(Bitmap.CompressFormat.JPEG, config.jpegQuality.coerceIn(1, 100), out)
-        }
-        oriented.recycle()
-        return Uri.fromFile(outFile)
-    }
-
-    private fun calcInSampleSize(width: Int, height: Int, maxEdge: Int): Int {
-        if (maxEdge <= 0) return 1
-        var sample = 1
-        val halfW = width / 2
-        val halfH = height / 2
-        while (halfW / sample >= maxEdge && halfH / sample >= maxEdge) {
-            sample *= 2
-        }
-        return sample.coerceAtLeast(1)
-    }
-
-    private fun scaleToMaxEdge(src: Bitmap, maxEdge: Int): Bitmap {
-        if (maxEdge <= 0) return src
-        val longEdge = max(src.width, src.height)
-        if (longEdge <= maxEdge) return src
-        val scale = maxEdge.toFloat() / longEdge
-        val newW = (src.width * scale).toInt().coerceAtLeast(1)
-        val newH = (src.height * scale).toInt().coerceAtLeast(1)
-        val scaled = Bitmap.createScaledBitmap(src, newW, newH, true)
-        if (scaled !== src) src.recycle()
-        return scaled
-    }
-
-    private fun readExifRotation(uri: Uri): Int = try {
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            val exif = ExifInterface(input)
-            when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                ExifInterface.ORIENTATION_ROTATE_90 -> 90
-                ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                ExifInterface.ORIENTATION_ROTATE_270 -> 270
-                else -> 0
-            }
-        } ?: 0
-    } catch (_: Exception) {
-        0
-    }
-
-    private fun applyRotation(src: Bitmap, degrees: Int): Bitmap {
-        if (degrees == 0) return src
-        val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
-        val rotated = Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
-        if (rotated !== src) src.recycle()
-        return rotated
     }
 
     private fun toast(msg: String) {
