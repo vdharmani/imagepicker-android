@@ -42,7 +42,7 @@ import java.io.File
  *
  * `tempCameraUri` is persisted with [rememberSaveable], so the camera result
  * survives configuration changes **and** process death — no manual key
- * management, and no multi-instance footgun: you can call `rememberImagePicker`
+ * management, and no multi-instance footgun: you can call `ComposeImagePicker`
  * twice in the same screen and the framework auto-disambiguates.
  *
  * @param authority FileProvider authority declared in the consumer's manifest.
@@ -51,8 +51,9 @@ import java.io.File
  * @param onPicked Called with the processed [Uri] after a single-image flow.
  * @param onMultiPicked Called with up to `maxItems` processed Uris after multi-pick.
  */
+@Suppress("ComposableNaming")
 @Composable
-fun rememberImagePicker(
+fun ComposeImagePicker(
     authority: String,
     config: ImagePickerConfig = ImagePickerConfig(),
     onPicked: (Uri) -> Unit = {},
