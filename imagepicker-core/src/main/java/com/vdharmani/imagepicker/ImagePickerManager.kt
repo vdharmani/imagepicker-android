@@ -237,14 +237,14 @@ class ImagePickerManager private constructor(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
-        cameraPermissionLauncher.launch(perms.toTypedArray())
+        safeLaunch { cameraPermissionLauncher.launch(perms.toTypedArray()) }
     }
 
     /** Launch the system Photo Picker for a single image. */
     fun uploadImage() {
-        pickSingleLauncher.launch(
-            PickVisualMediaRequest(PickVisualMedia.ImageOnly)
-        )
+        safeLaunch {
+            pickSingleLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly))
+        }
     }
 
     /**
@@ -256,23 +256,52 @@ class ImagePickerManager private constructor(
     fun pickMultipleImages(maxItems: Int) {
         if (maxItems <= 0) return
         pendingMultiMax = maxItems
-        pickMultiLauncher.launch(
-            PickVisualMediaRequest(PickVisualMedia.ImageOnly)
-        )
+        safeLaunch {
+            pickMultiLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly))
+        }
     }
 
     // -- internals --------------------------------------------------------
 
+    /**
+     * Runs [block] guarding against `ActivityNotFoundException` (no app to
+     * handle the intent — common on stripped emulators, Wear/TV builds, or
+     * devices without a camera) and any other launch-time exceptions. Routes
+     * failures through [Config.onError] instead of crashing the host.
+     */
+    private inline fun safeLaunch(block: () -> Unit) {
+        try {
+            block()
+        } catch (t: Throwable) {
+            config.onError?.invoke(t)
+        }
+    }
+
     private fun launchCameraIntent() {
         val ctx = context
         val file = File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-        tempCameraUri = FileProvider.getUriForFile(ctx, authority, file)
+        val uri = try {
+            FileProvider.getUriForFile(ctx, authority, file)
+        } catch (e: IllegalArgumentException) {
+            // Misconfigured FileProvider — authority mismatch, or file_paths.xml
+            // doesn't expose the cache dir. Surface a useful error instead of crashing.
+            config.onError?.invoke(
+                IllegalStateException(
+                    "FileProvider misconfigured for authority=\"$authority\". " +
+                        "Make sure your manifest declares a <provider> with this authority " +
+                        "and your file_paths.xml exposes <cache-path>.",
+                    e,
+                )
+            )
+            return
+        }
+        tempCameraUri = uri
 
         val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
-            putExtra(MediaStore.EXTRA_OUTPUT, tempCameraUri)
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        cameraLauncher.launch(intent)
+        safeLaunch { cameraLauncher.launch(intent) }
     }
 
     private fun processImage(uri: Uri) {
@@ -290,7 +319,12 @@ class ImagePickerManager private constructor(
         val ctx = context
         val dest = Uri.fromFile(File(ctx.cacheDir, "cropping_${System.currentTimeMillis()}.jpg"))
         val intent = handler.buildCropIntent(ctx, source, dest, config.cropOptions)
-        cropLauncher.launch(intent)
+        try {
+            cropLauncher.launch(intent)
+        } catch (t: Throwable) {
+            isProcessing = false
+            config.onError?.invoke(t)
+        }
     }
 
     private fun compressAndReturnImage(uri: Uri) {

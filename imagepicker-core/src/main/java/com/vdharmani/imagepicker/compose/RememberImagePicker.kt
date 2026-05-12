@@ -107,7 +107,12 @@ fun rememberImagePicker(
         if (handler != null) {
             val destFile = File(context.cacheDir, "cropping_${System.currentTimeMillis()}.jpg")
             val intent = handler.buildCropIntent(context, uri, Uri.fromFile(destFile), config.cropOptions)
-            cropLauncher.launch(intent)
+            try {
+                cropLauncher.launch(intent)
+            } catch (t: Throwable) {
+                isProcessing.value = false
+                config.onError?.invoke(t)
+            }
         } else {
             scope.launch {
                 val out = withContext(Dispatchers.IO) {
@@ -158,13 +163,29 @@ fun rememberImagePicker(
 
     fun launchCameraIntent() {
         val file = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-        val uri = FileProvider.getUriForFile(context, authority, file)
+        val uri = try {
+            FileProvider.getUriForFile(context, authority, file)
+        } catch (e: IllegalArgumentException) {
+            config.onError?.invoke(
+                IllegalStateException(
+                    "FileProvider misconfigured for authority=\"$authority\". " +
+                        "Make sure your manifest declares a <provider> with this authority " +
+                        "and your file_paths.xml exposes <cache-path>.",
+                    e,
+                )
+            )
+            return
+        }
         tempCameraUri = uri.toString()
         val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
             putExtra(MediaStore.EXTRA_OUTPUT, uri)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        cameraLauncher.launch(intent)
+        try {
+            cameraLauncher.launch(intent)
+        } catch (t: Throwable) {
+            config.onError?.invoke(t)
+        }
     }
 
     // -- camera permission --
@@ -186,6 +207,14 @@ fun rememberImagePicker(
         if (tempCameraUri != null) isProcessing.value = false
     }
 
+    fun safeLaunch(block: () -> Unit) {
+        try {
+            block()
+        } catch (t: Throwable) {
+            config.onError?.invoke(t)
+        }
+    }
+
     return remember {
         ImagePickerComposeManager(
             onCapture = {
@@ -193,15 +222,15 @@ fun rememberImagePicker(
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                     perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                 }
-                cameraPermissionLauncher.launch(perms.toTypedArray())
+                safeLaunch { cameraPermissionLauncher.launch(perms.toTypedArray()) }
             },
             onUpload = {
-                singleLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly))
+                safeLaunch { singleLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) }
             },
             onPickMultiple = { max ->
                 if (max > 0) {
                     pendingMultiMax.intValue = max
-                    multiLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly))
+                    safeLaunch { multiLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) }
                 }
             },
         )
