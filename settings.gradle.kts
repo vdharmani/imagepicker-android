@@ -16,4 +16,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "imagepicker-android"
-include(":imagepicker")
+include(":imagepicker-core")
+include(":imagepicker-ucrop")

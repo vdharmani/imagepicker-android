@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.vdharmani.imagepicker"
+    namespace = "com.vdharmani.imagepicker.ucrop"
     compileSdk = 35
 
     defaultConfig {
@@ -30,13 +30,8 @@ android {
 }
 
 dependencies {
+    api(project(":imagepicker-core"))
     api("com.github.yalantis:ucrop:2.2.10")
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.activity:activity-ktx:1.9.3")
-    implementation("androidx.fragment:fragment-ktx:1.8.5")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
 
 afterEvaluate {
@@ -44,9 +39,9 @@ afterEvaluate {
         publications {
             create<MavenPublication>("release") {
                 from(components["release"])
-                groupId = "com.github.vdharmani"
-                artifactId = "imagepicker-android"
-                version = "1.2.0"
+                groupId = "com.github.vdharmani.imagepicker-android"
+                artifactId = "imagepicker-ucrop"
+                version = "2.0.0"
             }
         }
     }

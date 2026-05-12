@@ -2,4 +2,4 @@ jdk:
   - openjdk17
 
 install:
-  - ./gradlew :imagepicker:publishToMavenLocal
+  - ./gradlew :imagepicker-core:publishToMavenLocal :imagepicker-ucrop:publishToMavenLocal

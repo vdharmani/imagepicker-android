@@ -6,10 +6,10 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Color
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -19,13 +19,14 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
-import androidx.annotation.ColorInt
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import androidx.exifinterface.media.ExifInterface
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
-import com.yalantis.ucrop.UCrop
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -37,32 +38,30 @@ import kotlin.math.max
  * Single + multi image picker with:
  *  - Camera capture (`captureImage`)
  *  - System Photo Picker for gallery (`uploadImage`, `pickMultipleImages`)
- *  - Optional uCrop cropping with configurable aspect ratio
+ *  - Optional cropping via a pluggable [CropHandler] (see `imagepicker-ucrop`)
  *  - EXIF-aware rotation, downscale to a max edge, JPEG compression
  *  - All heavy work off the main thread
+ *  - Survives process death while the camera is open (via SavedStateRegistry)
  *
- * Construct from an `Activity` or a `Fragment`:
- *
- * ```kotlin
- * // in ComponentActivity / AppCompatActivity:
- * val picker = ImagePickerManager(activity = this, authority = "$packageName.provider") { uri -> ... }
- *
- * // in Fragment:
- * val picker = ImagePickerManager(fragment = this, authority = "${requireContext().packageName}.provider") { uri -> ... }
- * ```
+ * Construct from an Activity or a Fragment. If you have multiple
+ * `ImagePickerManager` instances in the same host (e.g. profile + cover photo),
+ * pass a unique [stateKey] to each so their saved state doesn't collide.
  *
  * Consumers must declare a [FileProvider] in their AndroidManifest whose
- * `authorities` matches [authority], plus an `xml/file_paths.xml` exposing
- * the app's `cacheDir`. See the README.
+ * `authorities` matches [authority], plus an `xml/file_paths.xml` exposing the
+ * app's `cacheDir`. See the README.
  *
- * Instantiate **before** the host reaches the STARTED state — internally it
- * calls [ActivityResultCaller.registerForActivityResult].
+ * Must be instantiated **before** the host reaches the STARTED state — both
+ * `registerForActivityResult` and `SavedStateRegistry.registerSavedStateProvider`
+ * require that.
  */
 class ImagePickerManager private constructor(
     private val caller: ActivityResultCaller,
     private val lifecycleOwner: LifecycleOwner,
+    private val savedStateRegistry: SavedStateRegistry,
     private val contextProvider: () -> Context,
     private val authority: String,
+    private val stateKey: String,
     private val config: Config,
     private val multiCallback: ((List<Uri>) -> Unit)?,
     private val callback: ((Uri) -> Unit)?,
@@ -73,13 +72,16 @@ class ImagePickerManager private constructor(
         activity: ComponentActivity,
         authority: String,
         config: Config = Config(),
+        stateKey: String = DEFAULT_STATE_KEY,
         multiCallback: ((List<Uri>) -> Unit)? = null,
         callback: ((Uri) -> Unit)? = null,
     ) : this(
         caller = activity,
         lifecycleOwner = activity,
+        savedStateRegistry = activity.savedStateRegistry,
         contextProvider = { activity },
         authority = authority,
+        stateKey = stateKey,
         config = config,
         multiCallback = multiCallback,
         callback = callback,
@@ -90,23 +92,29 @@ class ImagePickerManager private constructor(
         fragment: Fragment,
         authority: String,
         config: Config = Config(),
+        stateKey: String = DEFAULT_STATE_KEY,
         multiCallback: ((List<Uri>) -> Unit)? = null,
         callback: ((Uri) -> Unit)? = null,
     ) : this(
         caller = fragment,
         lifecycleOwner = fragment,
+        savedStateRegistry = (fragment as SavedStateRegistryOwner).savedStateRegistry,
         contextProvider = { fragment.requireContext() },
         authority = authority,
+        stateKey = stateKey,
         config = config,
         multiCallback = multiCallback,
         callback = callback,
     )
 
     data class Config(
-        /** Run the result through uCrop. Set [cropAspect] to control the ratio. */
-        val crop: Boolean = false,
-        /** Crop aspect ratio (width, height). `null` = free crop. Default 1:1. */
-        val cropAspect: Pair<Float, Float>? = 1f to 1f,
+        /**
+         * Provide a [CropHandler] (e.g. `UCropHandler` from `imagepicker-ucrop`)
+         * to enable cropping after a single-image pick. `null` (default) = no crop.
+         */
+        val cropHandler: CropHandler? = null,
+        /** Options passed to [CropHandler.buildCropIntent]. */
+        val cropOptions: CropOptions = CropOptions(),
         /**
          * If true (default), images are decoded with EXIF rotation applied,
          * downscaled to [maxEdgePx], and re-encoded to JPEG at [jpegQuality].
@@ -117,21 +125,13 @@ class ImagePickerManager private constructor(
         val maxEdgePx: Int = 1920,
         /** JPEG output quality, 1..100. Ignored when [compress] is false. */
         val jpegQuality: Int = 75,
-        /** Toolbar background for uCrop. */
-        @ColorInt val cropToolbarColor: Int = Color.BLACK,
-        /** Status-bar tint for uCrop. */
-        @ColorInt val cropStatusBarColor: Int = Color.BLACK,
-        /** Active control (knob/handle) tint for uCrop. */
-        @ColorInt val cropActiveControlsColor: Int = Color.WHITE,
-        /** Title shown on the uCrop toolbar. */
-        val cropToolbarTitle: String = "Crop Image",
         /** Toast shown when the user denies the camera permission. */
         val cameraPermissionDeniedMessage: String = "Camera permission is required to capture images",
-        /** Invoked with `true` before bulk compression begins, `false` after it ends. */
+        /** Invoked with `true` before bulk compression begins, `false` after. */
         val onLoadingChanged: ((Boolean) -> Unit)? = null,
         /** Invoked when any picker/crop result is cancelled by the user. */
         val onCancelled: (() -> Unit)? = null,
-        /** Invoked when an unexpected failure happens (decode error, IO, etc.). */
+        /** Invoked when an unexpected failure happens (decode error, IO, crop, etc.). */
         val onError: ((Throwable) -> Unit)? = null,
     )
 
@@ -140,6 +140,19 @@ class ImagePickerManager private constructor(
     private var tempCameraUri: Uri? = null
     private var isProcessing = false
     private var pendingMultiMax: Int = Int.MAX_VALUE
+
+    init {
+        // Restore state first. SavedStateRegistry guarantees `consumeRestoredStateForKey`
+        // returns the bundle we wrote last time (or null on a fresh start).
+        val restored = savedStateRegistry.consumeRestoredStateForKey(stateKey)
+        restored?.getString(KEY_TEMP_CAMERA_URI)?.let { tempCameraUri = it.toUri() }
+
+        savedStateRegistry.registerSavedStateProvider(stateKey) {
+            Bundle().apply {
+                tempCameraUri?.let { putString(KEY_TEMP_CAMERA_URI, it.toString()) }
+            }
+        }
+    }
 
     // -- launchers --------------------------------------------------------
 
@@ -159,8 +172,10 @@ class ImagePickerManager private constructor(
         caller.registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
-            if (result.resultCode == Activity.RESULT_OK && tempCameraUri != null) {
-                processImage(tempCameraUri!!)
+            val uri = tempCameraUri
+            tempCameraUri = null
+            if (result.resultCode == Activity.RESULT_OK && uri != null) {
+                processImage(uri)
             } else {
                 config.onCancelled?.invoke()
             }
@@ -192,22 +207,20 @@ class ImagePickerManager private constructor(
         caller.registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
-            when {
-                result.resultCode == Activity.RESULT_OK && result.data != null ->
-                    UCrop.getOutput(result.data!!)
-                        ?.let { compressAndReturnImage(it) }
-                        ?: run {
-                            isProcessing = false
-                            config.onError?.invoke(IllegalStateException("uCrop returned no output"))
-                        }
-                result.resultCode == UCrop.RESULT_ERROR ->
-                    result.data?.let {
-                        isProcessing = false
-                        config.onError?.invoke(UCrop.getError(it) ?: RuntimeException("uCrop error"))
-                    }
-                else -> {
+            val handler = config.cropHandler
+            if (handler == null) {
+                isProcessing = false
+                return@registerForActivityResult
+            }
+            when (val r = handler.resolveResult(result.resultCode, result.data)) {
+                is CropHandler.Result.Success -> compressAndReturnImage(r.uri)
+                is CropHandler.Result.Cancelled -> {
                     isProcessing = false
                     config.onCancelled?.invoke()
+                }
+                is CropHandler.Result.Failure -> {
+                    isProcessing = false
+                    config.onError?.invoke(r.cause)
                 }
             }
         }
@@ -261,25 +274,19 @@ class ImagePickerManager private constructor(
     private fun processImage(uri: Uri) {
         if (isProcessing) return
         isProcessing = true
-        if (config.crop) cropImage(uri) else compressAndReturnImage(uri)
+        val handler = config.cropHandler
+        if (handler != null) {
+            launchCrop(handler, uri)
+        } else {
+            compressAndReturnImage(uri)
+        }
     }
 
-    private fun cropImage(uri: Uri) {
+    private fun launchCrop(handler: CropHandler, source: Uri) {
         val ctx = context
-        val file = File(ctx.cacheDir, "cropping_${System.currentTimeMillis()}.jpg")
-        val destUri = Uri.fromFile(file)
-        val options = UCrop.Options().apply {
-            setToolbarColor(config.cropToolbarColor)
-            setStatusBarColor(config.cropStatusBarColor)
-            setActiveControlsWidgetColor(config.cropActiveControlsColor)
-            setToolbarTitle(config.cropToolbarTitle)
-            setCompressionQuality(100)
-        }
-        val uCrop = UCrop.of(uri, destUri).withOptions(options).let {
-            val aspect = config.cropAspect
-            if (aspect != null) it.withAspectRatio(aspect.first, aspect.second) else it.useSourceImageAspectRatio()
-        }
-        cropLauncher.launch(uCrop.getIntent(ctx))
+        val dest = Uri.fromFile(File(ctx.cacheDir, "cropping_${System.currentTimeMillis()}.jpg"))
+        val intent = handler.buildCropIntent(ctx, source, dest, config.cropOptions)
+        cropLauncher.launch(intent)
     }
 
     private fun compressAndReturnImage(uri: Uri) {
@@ -380,5 +387,10 @@ class ImagePickerManager private constructor(
 
     private fun toast(msg: String) {
         Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    companion object {
+        const val DEFAULT_STATE_KEY: String = "ImagePickerManager"
+        private const val KEY_TEMP_CAMERA_URI: String = "tempCameraUri"
     }
 }

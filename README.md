@@ -1,14 +1,15 @@
 # imagepicker-android
 
 A small, opinionated image picker for Android: camera + system Photo Picker,
-single or multi-select, optional [uCrop](https://github.com/Yalantis/uCrop)
-cropping, EXIF-correct rotation, automatic downscale + JPEG compression off
-the main thread.
+single or multi-select, optional cropping, EXIF-correct rotation, automatic
+downscale + JPEG compression off the main thread.
 
 - Works in **Activities and Fragments** (registers against the right lifecycle for each).
+- **Survives process death** while the camera is open (`SavedStateRegistry`).
 - One class, no inheritance, no boilerplate.
 - Returns ready-to-upload `Uri`s in your app's `cacheDir`.
 - Uses the modern Photo Picker (no `READ_MEDIA_IMAGES` permission needed).
+- **Pluggable cropping** — core has zero crop dependency; opt in to uCrop with one extra artifact.
 
 ## Install
 
@@ -24,13 +25,19 @@ dependencyResolutionManagement {
 }
 ```
 
-**Step 2.** Add the dependency to your app module's `build.gradle.kts`:
+**Step 2.** Add the modules you actually need:
 
 ```kotlin
 dependencies {
-    implementation("com.github.vdharmani:imagepicker-android:1.2.0")
+    // Required: camera + gallery + compression + EXIF + downscale.
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-core:2.0.0")
+
+    // Optional: only if you want cropping (uses uCrop under the hood).
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-ucrop:2.0.0")
 }
 ```
+
+Apps that don't crop **don't pay for uCrop** (~200KB).
 
 ## FileProvider setup (one-time, in the consuming app)
 
@@ -77,7 +84,8 @@ class EditProfileActivity : AppCompatActivity() {
         imagePicker = ImagePickerManager(
             activity = this,
             authority = "$packageName.provider",
-            config = ImagePickerManager.Config(crop = true),
+            // Provide a CropHandler to enable cropping. Drop it to skip.
+            config = ImagePickerManager.Config(cropHandler = UCropHandler()),
         ) { uri ->
             // single-image callback: this is your compressed (optionally cropped) Uri
             profileImageView.setImageURI(uri)
@@ -101,7 +109,6 @@ class ProfileFragment : Fragment(R.layout.fragment_profile) {
         imagePicker = ImagePickerManager(
             fragment = this,
             authority = "${requireContext().packageName}.provider",
-            config = ImagePickerManager.Config(crop = true),
         ) { uri ->
             profileImageView.setImageURI(uri)
         }
@@ -117,8 +124,8 @@ class ProfileFragment : Fragment(R.layout.fragment_profile) {
 
 > **Important:** instantiate `ImagePickerManager` in `onCreate` *before* the
 > host reaches the STARTED state. Internally it calls
-> `registerForActivityResult`, which must happen during `INITIALIZED` or
-> `CREATED`.
+> `registerForActivityResult` and `SavedStateRegistry.registerSavedStateProvider`,
+> both of which require that.
 
 ## Usage — multiple images
 
@@ -132,8 +139,7 @@ imagePicker = ImagePickerManager(
         }
     ),
     multiCallback = { uris ->
-        // up to maxItems compressed Uris
-        adapter.addImages(uris)
+        adapter.addImages(uris)   // up to maxItems compressed Uris
     },
 )
 
@@ -142,25 +148,75 @@ pickButton.setOnClickListener {
 }
 ```
 
+## Multiple pickers in the same screen
+
+If you have two `ImagePickerManager` instances in the same Activity/Fragment
+(e.g. profile photo *and* business-card scan), give each a unique `stateKey`
+so their saved camera-Uri state doesn't collide on process death:
+
+```kotlin
+val profilePicker = ImagePickerManager(activity = this, authority = ..., stateKey = "profile") { ... }
+val cardPicker    = ImagePickerManager(activity = this, authority = ..., stateKey = "card")    { ... }
+```
+
 ## Configuration
 
 All optional, via `ImagePickerManager.Config`:
 
 | Field | Default | Purpose |
 |---|---|---|
-| `crop` | `false` | Run the picked image through uCrop. |
-| `cropAspect` | `1f to 1f` | Crop aspect ratio. `null` = free crop. |
+| `cropHandler` | `null` | Provide a `CropHandler` (e.g. `UCropHandler()`) to enable cropping. `null` = no crop. |
+| `cropOptions` | `CropOptions()` | Aspect ratio + uCrop colors/title. |
 | `compress` | `true` | Apply EXIF rotation + downscale + JPEG re-encode. `false` returns the original `Uri`. |
-| `maxEdgePx` | `1920` | Longest edge (px) the output is downscaled to before encoding. |
+| `maxEdgePx` | `1920` | Longest edge (px) the output is downscaled to. |
 | `jpegQuality` | `75` | Output JPEG quality, 1–100. |
-| `cropToolbarColor` | `Color.BLACK` | uCrop toolbar background. |
-| `cropStatusBarColor` | `Color.BLACK` | uCrop status bar tint. |
-| `cropActiveControlsColor` | `Color.WHITE` | uCrop active controls tint. |
-| `cropToolbarTitle` | `"Crop Image"` | uCrop title. |
 | `cameraPermissionDeniedMessage` | `"Camera permission is required to capture images"` | Toast when the user denies CAMERA. |
-| `onLoadingChanged` | `null` | `(Boolean) -> Unit` — fired before/after bulk compression so you can drive your own progress UI. |
-| `onCancelled` | `null` | `() -> Unit` — fired when the user backs out of the camera/gallery/crop. |
-| `onError` | `null` | `(Throwable) -> Unit` — fired for unexpected failures (decode/IO/uCrop). |
+| `onLoadingChanged` | `null` | `(Boolean) -> Unit` — drives your own progress UI during bulk compression. |
+| `onCancelled` | `null` | `() -> Unit` — user backed out of camera/gallery/crop. |
+| `onError` | `null` | `(Throwable) -> Unit` — unexpected failure (decode/IO/crop). |
+
+`CropOptions` fields:
+
+| Field | Default | Purpose |
+|---|---|---|
+| `aspect` | `1f to 1f` | Crop aspect ratio. `null` = free crop. |
+| `toolbarColor` | `Color.BLACK` | Crop UI toolbar background. |
+| `statusBarColor` | `Color.BLACK` | Crop UI status bar tint. |
+| `activeControlsColor` | `Color.WHITE` | Crop UI active controls tint. |
+| `toolbarTitle` | `"Crop Image"` | Crop UI title. |
+
+## Writing your own `CropHandler`
+
+If uCrop doesn't fit (e.g. you want a Compose-based cropper), implement the
+SPI directly:
+
+```kotlin
+class MyCropHandler : CropHandler {
+    override fun buildCropIntent(context, source, destination, options): Intent { ... }
+    override fun resolveResult(resultCode, data): CropHandler.Result { ... }
+}
+```
+
+Then pass `MyCropHandler()` as `Config.cropHandler`.
+
+## Migrating from 1.x
+
+- The `crop`, `cropAspect`, `cropToolbarColor`, `cropStatusBarColor`,
+  `cropActiveControlsColor`, `cropToolbarTitle` fields on `Config` have been
+  collapsed into `cropHandler` + `cropOptions`. If you were cropping with 1.x,
+  add the `imagepicker-ucrop` artifact and change:
+
+  ```kotlin
+  // 1.x
+  Config(crop = true, cropAspect = 16f to 9f, cropToolbarTitle = "Crop")
+
+  // 2.x
+  Config(
+      cropHandler = UCropHandler(),
+      cropOptions = CropOptions(aspect = 16f to 9f, toolbarTitle = "Crop"),
+  )
+  ```
+- Everything else is source-compatible.
 
 ## Output
 
