@@ -30,10 +30,10 @@ dependencyResolutionManagement {
 ```kotlin
 dependencies {
     // Required: camera + gallery + compression + EXIF + downscale.
-    implementation("com.github.vdharmani.imagepicker-android:imagepicker-core:1.0.2")
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-core:1.0.1")
 
     // Optional: only if you want cropping (uses uCrop under the hood).
-    implementation("com.github.vdharmani.imagepicker-android:imagepicker-ucrop:1.0.2")
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-ucrop:1.0.1")
 }
 ```
 
@@ -133,7 +133,7 @@ class ProfileFragment : Fragment(R.layout.fragment_profile) {
 @Composable
 fun EditProfileScreen(onSaved: (Uri) -> Unit) {
     val context = LocalContext.current
-    val picker = ComposeImagePicker(
+    val picker = rememberImagePicker(
         authority = "${context.packageName}.provider",
         // Optional cropping — drop this line to skip crop.
         config = ImagePickerConfig(cropHandler = UCropHandler()),
@@ -151,7 +151,7 @@ Multi-pick in Compose:
 
 ```kotlin
 var loading by remember { mutableStateOf(false) }
-val picker = ComposeImagePicker(
+val picker = rememberImagePicker(
     authority = "${context.packageName}.provider",
     config = ImagePickerConfig(onLoadingChanged = { loading = it }),
     onMultiPicked = { uris -> viewModel.addImages(uris) },
@@ -162,11 +162,11 @@ Button(onClick = { picker.pickMultipleImages(maxItems = 5) }) {
 }
 ```
 
-Result launchers registered inside `ComposeImagePicker` are scoped to the
+Result launchers registered inside `rememberImagePicker` are scoped to the
 current composition, so they're released automatically when the composable
 leaves the tree. `tempCameraUri` is stored in `rememberSaveable`, so the
 camera result survives configuration changes **and** process death — no manual
-`stateKey` needed, and you can call `ComposeImagePicker` multiple times in the
+`stateKey` needed, and you can call `rememberImagePicker` multiple times in the
 same screen without collision.
 
 ## Usage — multiple images
