@@ -1,0 +1,143 @@
+# imagepicker-android
+
+A small, opinionated image picker for Android: camera + gallery, single or
+multi-select, optional [uCrop](https://github.com/Yalantis/uCrop) cropping,
+JPEG compression off the main thread.
+
+- Works with any `ComponentActivity` (so `AppCompatActivity` too).
+- One class, no inheritance, no Fragment boilerplate.
+- Returns ready-to-upload `Uri`s in your app's `cacheDir`.
+
+## Install
+
+**Step 1.** Add JitPack to your `settings.gradle.kts`:
+
+```kotlin
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("https://jitpack.io") }
+    }
+}
+```
+
+**Step 2.** Add the dependency to your app module's `build.gradle.kts`:
+
+```kotlin
+dependencies {
+    implementation("com.github.vdharmani:imagepicker-android:1.0.0")
+}
+```
+
+## FileProvider setup (one-time, in the consuming app)
+
+In `AndroidManifest.xml`:
+
+```xml
+<provider
+    android:name="androidx.core.content.FileProvider"
+    android:authorities="${applicationId}.provider"
+    android:exported="false"
+    android:grantUriPermissions="true">
+    <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/file_paths" />
+</provider>
+```
+
+In `res/xml/file_paths.xml`:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="cache_images" path="." />
+</paths>
+```
+
+In `AndroidManifest.xml` (add the camera permission):
+
+```xml
+<uses-permission android:name="android.permission.CAMERA" />
+```
+
+## Usage — single image
+
+```kotlin
+class EditProfileActivity : AppCompatActivity() {
+
+    private lateinit var imagePicker: ImagePickerManager
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_edit_profile)
+
+        imagePicker = ImagePickerManager(
+            activity = this,
+            authority = "$packageName.provider",
+            config = ImagePickerManager.Config(crop = true),
+        ) { uri ->
+            // single-image callback: this is your compressed (optionally cropped) Uri
+            profileImageView.setImageURI(uri)
+        }
+
+        cameraButton.setOnClickListener { imagePicker.captureImage() }
+        galleryButton.setOnClickListener { imagePicker.uploadImage() }
+    }
+}
+```
+
+> **Important:** instantiate `ImagePickerManager` in `onCreate` *before* the
+> activity reaches the STARTED state. Internally it calls
+> `registerForActivityResult`, which must happen during `INITIALIZED` or
+> `CREATED`.
+
+## Usage — multiple images
+
+```kotlin
+imagePicker = ImagePickerManager(
+    activity = this,
+    authority = "$packageName.provider",
+    config = ImagePickerManager.Config(
+        onLoadingChanged = { loading ->
+            if (loading) showProgressDialog() else dismissProgressDialog()
+        }
+    ),
+    multiCallback = { uris ->
+        // up to maxItems compressed Uris
+        adapter.addImages(uris)
+    },
+)
+
+pickButton.setOnClickListener {
+    imagePicker.pickMultipleImages(maxItems = 5)
+}
+```
+
+## Configuration
+
+All optional, via `ImagePickerManager.Config`:
+
+| Field | Default | Purpose |
+|---|---|---|
+| `crop` | `false` | Run the picked image through uCrop with a 1:1 ratio. |
+| `jpegQuality` | `75` | Output JPEG quality, 1–100. |
+| `cropToolbarColor` | `Color.BLACK` | uCrop toolbar background. |
+| `cropStatusBarColor` | `Color.BLACK` | uCrop status bar tint. |
+| `cropActiveControlsColor` | `Color.WHITE` | uCrop active controls tint. |
+| `cropToolbarTitle` | `"Crop Image"` | uCrop title. |
+| `galleryChooserTitle` | `"Select Image"` | Chooser title for single pick. |
+| `multiGalleryChooserTitle` | `"Select Images"` | Chooser title for multi pick. |
+| `cameraPermissionDeniedMessage` | `"Camera permission is required to capture images"` | Toast when the user denies CAMERA. |
+| `onLoadingChanged` | `null` | `(Boolean) -> Unit` — fired before/after multi-image compression so you can drive your own progress UI. |
+
+## Output
+
+Every returned `Uri` points to a file inside the consuming app's `cacheDir`
+(JPEG, quality `Config.jpegQuality`). The library does **not** clean these
+files up automatically — delete them in `onDestroy` if you care, or rely on
+the OS to clear the cache when storage is low.
+
+## License
+
+MIT
