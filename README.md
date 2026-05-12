@@ -1,12 +1,14 @@
 # imagepicker-android
 
-A small, opinionated image picker for Android: camera + gallery, single or
-multi-select, optional [uCrop](https://github.com/Yalantis/uCrop) cropping,
-JPEG compression off the main thread.
+A small, opinionated image picker for Android: camera + system Photo Picker,
+single or multi-select, optional [uCrop](https://github.com/Yalantis/uCrop)
+cropping, EXIF-correct rotation, automatic downscale + JPEG compression off
+the main thread.
 
 - Works with any `ComponentActivity` (so `AppCompatActivity` too).
 - One class, no inheritance, no Fragment boilerplate.
 - Returns ready-to-upload `Uri`s in your app's `cacheDir`.
+- Uses the modern Photo Picker (no `READ_MEDIA_IMAGES` permission needed).
 
 ## Install
 
@@ -26,7 +28,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.vdharmani:imagepicker-android:1.0.0")
+    implementation("com.github.vdharmani:imagepicker-android:1.1.0")
 }
 ```
 
@@ -120,16 +122,19 @@ All optional, via `ImagePickerManager.Config`:
 
 | Field | Default | Purpose |
 |---|---|---|
-| `crop` | `false` | Run the picked image through uCrop with a 1:1 ratio. |
+| `crop` | `false` | Run the picked image through uCrop. |
+| `cropAspect` | `1f to 1f` | Crop aspect ratio. `null` = free crop. |
+| `compress` | `true` | Apply EXIF rotation + downscale + JPEG re-encode. `false` returns the original `Uri`. |
+| `maxEdgePx` | `1920` | Longest edge (px) the output is downscaled to before encoding. |
 | `jpegQuality` | `75` | Output JPEG quality, 1–100. |
 | `cropToolbarColor` | `Color.BLACK` | uCrop toolbar background. |
 | `cropStatusBarColor` | `Color.BLACK` | uCrop status bar tint. |
 | `cropActiveControlsColor` | `Color.WHITE` | uCrop active controls tint. |
 | `cropToolbarTitle` | `"Crop Image"` | uCrop title. |
-| `galleryChooserTitle` | `"Select Image"` | Chooser title for single pick. |
-| `multiGalleryChooserTitle` | `"Select Images"` | Chooser title for multi pick. |
 | `cameraPermissionDeniedMessage` | `"Camera permission is required to capture images"` | Toast when the user denies CAMERA. |
-| `onLoadingChanged` | `null` | `(Boolean) -> Unit` — fired before/after multi-image compression so you can drive your own progress UI. |
+| `onLoadingChanged` | `null` | `(Boolean) -> Unit` — fired before/after bulk compression so you can drive your own progress UI. |
+| `onCancelled` | `null` | `() -> Unit` — fired when the user backs out of the camera/gallery/crop. |
+| `onError` | `null` | `(Throwable) -> Unit` — fired for unexpected failures (decode/IO/uCrop). |
 
 ## Output
 
