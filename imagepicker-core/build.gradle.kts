@@ -46,7 +46,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId = "com.github.vdharmani.imagepicker-android"
                 artifactId = "imagepicker-core"
-                version = "2.0.0"
+                version = "2.0.1"
             }
         }
     }

@@ -147,10 +147,19 @@ class ImagePickerManager private constructor(
         val restored = savedStateRegistry.consumeRestoredStateForKey(stateKey)
         restored?.getString(KEY_TEMP_CAMERA_URI)?.let { tempCameraUri = it.toUri() }
 
-        savedStateRegistry.registerSavedStateProvider(stateKey) {
-            Bundle().apply {
-                tempCameraUri?.let { putString(KEY_TEMP_CAMERA_URI, it.toString()) }
+        try {
+            savedStateRegistry.registerSavedStateProvider(stateKey) {
+                Bundle().apply {
+                    tempCameraUri?.let { putString(KEY_TEMP_CAMERA_URI, it.toString()) }
+                }
             }
+        } catch (e: IllegalArgumentException) {
+            throw IllegalStateException(
+                "Another ImagePickerManager is already registered with stateKey=\"$stateKey\" " +
+                    "in this host. If you have multiple pickers in the same Activity/Fragment, " +
+                    "pass a unique stateKey to each, e.g. ImagePickerManager(..., stateKey = \"profile\").",
+                e,
+            )
         }
     }
 
