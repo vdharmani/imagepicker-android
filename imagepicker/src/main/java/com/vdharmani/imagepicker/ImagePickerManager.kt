@@ -2,6 +2,7 @@ package com.vdharmani.imagepicker
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -12,14 +13,17 @@ import android.os.Build
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultCaller
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia
+import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.annotation.ColorInt
 import androidx.core.content.FileProvider
 import androidx.exifinterface.media.ExifInterface
+import androidx.fragment.app.Fragment
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.yalantis.ucrop.UCrop
 import kotlinx.coroutines.Dispatchers
@@ -37,20 +41,66 @@ import kotlin.math.max
  *  - EXIF-aware rotation, downscale to a max edge, JPEG compression
  *  - All heavy work off the main thread
  *
- * Consumers must declare a [FileProvider] in their AndroidManifest whose
- * `authorities` matches the [authority] passed here, plus an `xml/file_paths.xml`
- * exposing the app's `cacheDir`. See the README.
+ * Construct from an `Activity` or a `Fragment`:
  *
- * Instantiate from `Activity.onCreate` **before** the activity reaches the
- * STARTED state — internally it calls [ComponentActivity.registerForActivityResult].
+ * ```kotlin
+ * // in ComponentActivity / AppCompatActivity:
+ * val picker = ImagePickerManager(activity = this, authority = "$packageName.provider") { uri -> ... }
+ *
+ * // in Fragment:
+ * val picker = ImagePickerManager(fragment = this, authority = "${requireContext().packageName}.provider") { uri -> ... }
+ * ```
+ *
+ * Consumers must declare a [FileProvider] in their AndroidManifest whose
+ * `authorities` matches [authority], plus an `xml/file_paths.xml` exposing
+ * the app's `cacheDir`. See the README.
+ *
+ * Instantiate **before** the host reaches the STARTED state — internally it
+ * calls [ActivityResultCaller.registerForActivityResult].
  */
-class ImagePickerManager(
-    private val activity: ComponentActivity,
+class ImagePickerManager private constructor(
+    private val caller: ActivityResultCaller,
+    private val lifecycleOwner: LifecycleOwner,
+    private val contextProvider: () -> Context,
     private val authority: String,
-    private val config: Config = Config(),
-    private val multiCallback: ((List<Uri>) -> Unit)? = null,
-    private val callback: ((Uri) -> Unit)? = null,
+    private val config: Config,
+    private val multiCallback: ((List<Uri>) -> Unit)?,
+    private val callback: ((Uri) -> Unit)?,
 ) {
+
+    /** Construct for an Activity. */
+    constructor(
+        activity: ComponentActivity,
+        authority: String,
+        config: Config = Config(),
+        multiCallback: ((List<Uri>) -> Unit)? = null,
+        callback: ((Uri) -> Unit)? = null,
+    ) : this(
+        caller = activity,
+        lifecycleOwner = activity,
+        contextProvider = { activity },
+        authority = authority,
+        config = config,
+        multiCallback = multiCallback,
+        callback = callback,
+    )
+
+    /** Construct for a Fragment. */
+    constructor(
+        fragment: Fragment,
+        authority: String,
+        config: Config = Config(),
+        multiCallback: ((List<Uri>) -> Unit)? = null,
+        callback: ((Uri) -> Unit)? = null,
+    ) : this(
+        caller = fragment,
+        lifecycleOwner = fragment,
+        contextProvider = { fragment.requireContext() },
+        authority = authority,
+        config = config,
+        multiCallback = multiCallback,
+        callback = callback,
+    )
 
     data class Config(
         /** Run the result through uCrop. Set [cropAspect] to control the ratio. */
@@ -85,6 +135,8 @@ class ImagePickerManager(
         val onError: ((Throwable) -> Unit)? = null,
     )
 
+    private val context: Context get() = contextProvider()
+
     private var tempCameraUri: Uri? = null
     private var isProcessing = false
     private var pendingMultiMax: Int = Int.MAX_VALUE
@@ -92,7 +144,7 @@ class ImagePickerManager(
     // -- launchers --------------------------------------------------------
 
     private val cameraPermissionLauncher: ActivityResultLauncher<Array<String>> =
-        activity.registerForActivityResult(
+        caller.registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { result ->
             if (result.all { it.value }) {
@@ -104,7 +156,7 @@ class ImagePickerManager(
         }
 
     private val cameraLauncher: ActivityResultLauncher<Intent> =
-        activity.registerForActivityResult(
+        caller.registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
             if (result.resultCode == Activity.RESULT_OK && tempCameraUri != null) {
@@ -115,19 +167,19 @@ class ImagePickerManager(
         }
 
     private val pickSingleLauncher: ActivityResultLauncher<PickVisualMediaRequest> =
-        activity.registerForActivityResult(PickVisualMedia()) { uri ->
+        caller.registerForActivityResult(PickVisualMedia()) { uri ->
             if (uri != null) processImage(uri) else config.onCancelled?.invoke()
         }
 
     private val pickMultiLauncher: ActivityResultLauncher<PickVisualMediaRequest> =
-        activity.registerForActivityResult(PickMultipleVisualMedia()) { uris ->
+        caller.registerForActivityResult(PickMultipleVisualMedia()) { uris ->
             if (uris.isNullOrEmpty()) {
                 config.onCancelled?.invoke()
                 return@registerForActivityResult
             }
             val capped = uris.take(pendingMultiMax)
             config.onLoadingChanged?.invoke(true)
-            activity.lifecycleScope.launch {
+            lifecycleOwner.lifecycleScope.launch {
                 val processed = withContext(Dispatchers.IO) {
                     capped.mapNotNull { runCatching { processSync(it) }.getOrNull() }
                 }
@@ -137,7 +189,7 @@ class ImagePickerManager(
         }
 
     private val cropLauncher: ActivityResultLauncher<Intent> =
-        activity.registerForActivityResult(
+        caller.registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
             when {
@@ -195,8 +247,9 @@ class ImagePickerManager(
     // -- internals --------------------------------------------------------
 
     private fun launchCameraIntent() {
-        val file = File(activity.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-        tempCameraUri = FileProvider.getUriForFile(activity, authority, file)
+        val ctx = context
+        val file = File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
+        tempCameraUri = FileProvider.getUriForFile(ctx, authority, file)
 
         val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
             putExtra(MediaStore.EXTRA_OUTPUT, tempCameraUri)
@@ -212,7 +265,8 @@ class ImagePickerManager(
     }
 
     private fun cropImage(uri: Uri) {
-        val file = File(activity.cacheDir, "cropping_${System.currentTimeMillis()}.jpg")
+        val ctx = context
+        val file = File(ctx.cacheDir, "cropping_${System.currentTimeMillis()}.jpg")
         val destUri = Uri.fromFile(file)
         val options = UCrop.Options().apply {
             setToolbarColor(config.cropToolbarColor)
@@ -225,11 +279,11 @@ class ImagePickerManager(
             val aspect = config.cropAspect
             if (aspect != null) it.withAspectRatio(aspect.first, aspect.second) else it.useSourceImageAspectRatio()
         }
-        cropLauncher.launch(uCrop.getIntent(activity))
+        cropLauncher.launch(uCrop.getIntent(ctx))
     }
 
     private fun compressAndReturnImage(uri: Uri) {
-        activity.lifecycleScope.launch {
+        lifecycleOwner.lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching { processSync(uri) }.getOrElse {
                     config.onError?.invoke(it)
@@ -248,10 +302,12 @@ class ImagePickerManager(
      */
     private fun processSync(uri: Uri): Uri {
         if (!config.compress) return uri
+        val ctx = context
+        val resolver = ctx.contentResolver
 
         // First pass — get raw dimensions without allocating pixels.
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        activity.contentResolver.openInputStream(uri)?.use {
+        resolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, bounds)
         }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
@@ -261,7 +317,7 @@ class ImagePickerManager(
         val decodeOpts = BitmapFactory.Options().apply {
             inSampleSize = calcInSampleSize(bounds.outWidth, bounds.outHeight, config.maxEdgePx)
         }
-        val sampled = activity.contentResolver.openInputStream(uri)?.use {
+        val sampled = resolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, decodeOpts)
         } ?: error("Could not decode image for $uri")
 
@@ -269,7 +325,7 @@ class ImagePickerManager(
         val scaled = scaleToMaxEdge(sampled, config.maxEdgePx)
         val oriented = applyRotation(scaled, rotation)
 
-        val outFile = File(activity.cacheDir, "compressed_${System.currentTimeMillis()}.jpg")
+        val outFile = File(ctx.cacheDir, "compressed_${System.currentTimeMillis()}.jpg")
         FileOutputStream(outFile).use { out ->
             oriented.compress(Bitmap.CompressFormat.JPEG, config.jpegQuality.coerceIn(1, 100), out)
         }
@@ -280,8 +336,8 @@ class ImagePickerManager(
     private fun calcInSampleSize(width: Int, height: Int, maxEdge: Int): Int {
         if (maxEdge <= 0) return 1
         var sample = 1
-        var halfW = width / 2
-        var halfH = height / 2
+        val halfW = width / 2
+        val halfH = height / 2
         while (halfW / sample >= maxEdge && halfH / sample >= maxEdge) {
             sample *= 2
         }
@@ -301,7 +357,7 @@ class ImagePickerManager(
     }
 
     private fun readExifRotation(uri: Uri): Int = try {
-        activity.contentResolver.openInputStream(uri)?.use { input ->
+        context.contentResolver.openInputStream(uri)?.use { input ->
             val exif = ExifInterface(input)
             when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
                 ExifInterface.ORIENTATION_ROTATE_90 -> 90
@@ -323,6 +379,6 @@ class ImagePickerManager(
     }
 
     private fun toast(msg: String) {
-        Toast.makeText(activity, msg, Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
     }
 }

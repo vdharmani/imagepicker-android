@@ -33,6 +33,7 @@ dependencies {
     api("com.github.yalantis:ucrop:2.2.10")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
@@ -45,7 +46,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId = "com.github.vdharmani"
                 artifactId = "imagepicker-android"
-                version = "1.1.0"
+                version = "1.2.0"
             }
         }
     }

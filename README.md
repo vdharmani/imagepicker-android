@@ -5,8 +5,8 @@ single or multi-select, optional [uCrop](https://github.com/Yalantis/uCrop)
 cropping, EXIF-correct rotation, automatic downscale + JPEG compression off
 the main thread.
 
-- Works with any `ComponentActivity` (so `AppCompatActivity` too).
-- One class, no inheritance, no Fragment boilerplate.
+- Works in **Activities and Fragments** (registers against the right lifecycle for each).
+- One class, no inheritance, no boilerplate.
 - Returns ready-to-upload `Uri`s in your app's `cacheDir`.
 - Uses the modern Photo Picker (no `READ_MEDIA_IMAGES` permission needed).
 
@@ -28,7 +28,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.vdharmani:imagepicker-android:1.1.0")
+    implementation("com.github.vdharmani:imagepicker-android:1.2.0")
 }
 ```
 
@@ -63,7 +63,7 @@ In `AndroidManifest.xml` (add the camera permission):
 <uses-permission android:name="android.permission.CAMERA" />
 ```
 
-## Usage — single image
+## Usage — single image (Activity)
 
 ```kotlin
 class EditProfileActivity : AppCompatActivity() {
@@ -89,8 +89,34 @@ class EditProfileActivity : AppCompatActivity() {
 }
 ```
 
+## Usage — single image (Fragment)
+
+```kotlin
+class ProfileFragment : Fragment(R.layout.fragment_profile) {
+
+    private lateinit var imagePicker: ImagePickerManager
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        imagePicker = ImagePickerManager(
+            fragment = this,
+            authority = "${requireContext().packageName}.provider",
+            config = ImagePickerManager.Config(crop = true),
+        ) { uri ->
+            profileImageView.setImageURI(uri)
+        }
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        cameraButton.setOnClickListener { imagePicker.captureImage() }
+        galleryButton.setOnClickListener { imagePicker.uploadImage() }
+    }
+}
+```
+
 > **Important:** instantiate `ImagePickerManager` in `onCreate` *before* the
-> activity reaches the STARTED state. Internally it calls
+> host reaches the STARTED state. Internally it calls
 > `registerForActivityResult`, which must happen during `INITIALIZED` or
 > `CREATED`.
 
