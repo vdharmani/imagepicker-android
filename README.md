@@ -30,10 +30,10 @@ dependencyResolutionManagement {
 ```kotlin
 dependencies {
     // Required: camera + gallery + compression + EXIF + downscale.
-    implementation("com.github.vdharmani.imagepicker-android:imagepicker-core:2.0.1")
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-core:1.0.0")
 
     // Optional: only if you want cropping (uses uCrop under the hood).
-    implementation("com.github.vdharmani.imagepicker-android:imagepicker-ucrop:2.0.1")
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-ucrop:1.0.0")
 }
 ```
 
@@ -198,25 +198,6 @@ class MyCropHandler : CropHandler {
 ```
 
 Then pass `MyCropHandler()` as `Config.cropHandler`.
-
-## Migrating from 1.x
-
-- The `crop`, `cropAspect`, `cropToolbarColor`, `cropStatusBarColor`,
-  `cropActiveControlsColor`, `cropToolbarTitle` fields on `Config` have been
-  collapsed into `cropHandler` + `cropOptions`. If you were cropping with 1.x,
-  add the `imagepicker-ucrop` artifact and change:
-
-  ```kotlin
-  // 1.x
-  Config(crop = true, cropAspect = 16f to 9f, cropToolbarTitle = "Crop")
-
-  // 2.x
-  Config(
-      cropHandler = UCropHandler(),
-      cropOptions = CropOptions(aspect = 16f to 9f, toolbarTitle = "Crop"),
-  )
-  ```
-- Everything else is source-compatible.
 
 ## Output
 
