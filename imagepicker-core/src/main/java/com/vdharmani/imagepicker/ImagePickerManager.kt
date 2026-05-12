@@ -19,6 +19,8 @@ import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.savedstate.SavedStateRegistry
@@ -130,18 +132,16 @@ class ImagePickerManager private constructor(
     )
 
     private val context: Context get() = contextProvider()
-    private val processor: ImageProcessor by lazy { ImageProcessor(context) }
+    // Use the application context so the processor doesn't pin the Activity/Fragment
+    // host, and so it's safe to lazy-init even if the host has detached by then.
+    private val processor: ImageProcessor by lazy { ImageProcessor(context.applicationContext) }
 
     private var tempCameraUri: Uri? = null
     private var isProcessing = false
     private var pendingMultiMax: Int = Int.MAX_VALUE
 
     init {
-        // Restore state first. SavedStateRegistry guarantees `consumeRestoredStateForKey`
-        // returns the bundle we wrote last time (or null on a fresh start).
-        val restored = savedStateRegistry.consumeRestoredStateForKey(stateKey)
-        restored?.getString(KEY_TEMP_CAMERA_URI)?.let { tempCameraUri = it.toUri() }
-
+        // Register the provider eagerly — safe to call any time before STARTED.
         try {
             savedStateRegistry.registerSavedStateProvider(stateKey) {
                 Bundle().apply {
@@ -156,6 +156,31 @@ class ImagePickerManager private constructor(
                 e,
             )
         }
+
+        // Restoration: `consumeRestoredStateForKey` only returns the saved bundle
+        // AFTER `SavedStateRegistry.performRestore()` runs, which happens during
+        // `super.onCreate(savedInstanceState)`. Consumers commonly construct the
+        // manager as a field initializer (before super.onCreate) — without this
+        // observer, the restored URI is silently lost. If we're already past
+        // CREATED at construction time, restore immediately; otherwise wait for
+        // the ON_CREATE event.
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED)) {
+            consumeRestoredState()
+        } else {
+            lifecycleOwner.lifecycle.addObserver(object : LifecycleEventObserver {
+                override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {
+                    if (event == Lifecycle.Event.ON_CREATE) {
+                        consumeRestoredState()
+                        source.lifecycle.removeObserver(this)
+                    }
+                }
+            })
+        }
+    }
+
+    private fun consumeRestoredState() {
+        val restored = savedStateRegistry.consumeRestoredStateForKey(stateKey)
+        restored?.getString(KEY_TEMP_CAMERA_URI)?.let { tempCameraUri = it.toUri() }
     }
 
     // -- launchers --------------------------------------------------------

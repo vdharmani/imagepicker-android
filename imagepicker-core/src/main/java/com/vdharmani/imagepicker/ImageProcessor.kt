@@ -46,15 +46,22 @@ class ImageProcessor(private val context: Context) {
             BitmapFactory.decodeStream(it, null, decodeOpts)
         } ?: error("Could not decode image for $uri")
 
-        val rotation = readExifRotation(uri)
+        val transform = readExifTransform(uri)
         val scaled = scaleToMaxEdge(sampled, config.maxEdgePx)
-        val oriented = applyRotation(scaled, rotation)
+        val oriented = applyTransform(scaled, transform)
 
         val outFile = File(context.cacheDir, "compressed_${System.currentTimeMillis()}.jpg")
-        FileOutputStream(outFile).use { out ->
+        val ok = FileOutputStream(outFile).use { out ->
             oriented.compress(Bitmap.CompressFormat.JPEG, config.jpegQuality.coerceIn(1, 100), out)
         }
         oriented.recycle()
+        if (!ok) {
+            // Compress returned false — codec failure or recycled bitmap. The output
+            // file is almost certainly empty/corrupt; clean it up rather than handing
+            // back a bad Uri.
+            outFile.delete()
+            error("Bitmap.compress returned false for $uri (possibly a codec failure)")
+        }
         return Uri.fromFile(outFile)
     }
 
@@ -81,25 +88,45 @@ class ImageProcessor(private val context: Context) {
         return scaled
     }
 
-    private fun readExifRotation(uri: Uri): Int = try {
+    /**
+     * Reads `TAG_ORIENTATION` and returns a [Matrix] that undoes it, or `null`
+     * if the file has no EXIF, the orientation is `ORIENTATION_NORMAL`, or
+     * EXIF parsing fails. Covers all eight EXIF orientations including the
+     * four flip/transpose cases that pure-rotation handlers miss.
+     */
+    private fun readExifTransform(uri: Uri): Matrix? = try {
         context.contentResolver.openInputStream(uri)?.use { input ->
             val exif = ExifInterface(input)
-            when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                ExifInterface.ORIENTATION_ROTATE_90 -> 90
-                ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                ExifInterface.ORIENTATION_ROTATE_270 -> 270
-                else -> 0
+            val orientation = exif.getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL,
+            )
+            when (orientation) {
+                ExifInterface.ORIENTATION_FLIP_HORIZONTAL ->
+                    Matrix().apply { postScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_ROTATE_180 ->
+                    Matrix().apply { postRotate(180f) }
+                ExifInterface.ORIENTATION_FLIP_VERTICAL ->
+                    Matrix().apply { postScale(1f, -1f) }
+                ExifInterface.ORIENTATION_TRANSPOSE ->
+                    Matrix().apply { postRotate(90f); postScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_ROTATE_90 ->
+                    Matrix().apply { postRotate(90f) }
+                ExifInterface.ORIENTATION_TRANSVERSE ->
+                    Matrix().apply { postRotate(-90f); postScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_ROTATE_270 ->
+                    Matrix().apply { postRotate(270f) }
+                else -> null
             }
-        } ?: 0
+        }
     } catch (_: Exception) {
-        0
+        null
     }
 
-    private fun applyRotation(src: Bitmap, degrees: Int): Bitmap {
-        if (degrees == 0) return src
-        val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
-        val rotated = Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
-        if (rotated !== src) src.recycle()
-        return rotated
+    private fun applyTransform(src: Bitmap, matrix: Matrix?): Bitmap {
+        if (matrix == null) return src
+        val transformed = Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
+        if (transformed !== src) src.recycle()
+        return transformed
     }
 }

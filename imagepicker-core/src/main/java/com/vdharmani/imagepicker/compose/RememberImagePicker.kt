@@ -60,7 +60,9 @@ fun rememberImagePicker(
 ): ImagePickerComposeManager {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val processor = remember(context) { ImageProcessor(context) }
+    // Use the application context so the processor isn't tied to a transient
+    // Compose Context wrapper.
+    val processor = remember(context) { ImageProcessor(context.applicationContext) }
 
     // Persisted across config changes and process death.
     var tempCameraUri by rememberSaveable { mutableStateOf<String?>(null) }
