@@ -41,7 +41,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId = "com.github.vdharmani.imagepicker-android"
                 artifactId = "imagepicker-ucrop"
-                version = "1.0.1"
+                version = "1.0.2"
             }
         }
     }
