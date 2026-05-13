@@ -2,12 +2,12 @@ package com.vdharmani.imagepicker.compose
 
 /**
  * Compose-side counterpart to `ImagePickerManager`. Construct via
- * [rememberImagePicker]; you should not instantiate this class directly.
+ * [composeImagePicker]; you should not instantiate this class directly.
  *
  * Method names mirror `ImagePickerManager` so a developer who knows one
  * surface can use the other without re-learning the API.
  */
-class ImagePickerComposeManager internal constructor(
+class ComposeImagePickerManager internal constructor(
     private val onCapture: () -> Unit,
     private val onUpload: () -> Unit,
     private val onPickMultiple: (Int) -> Unit,

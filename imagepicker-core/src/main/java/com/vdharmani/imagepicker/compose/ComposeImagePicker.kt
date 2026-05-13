@@ -42,7 +42,7 @@ import java.io.File
  *
  * `tempCameraUri` is persisted with [rememberSaveable], so the camera result
  * survives configuration changes **and** process death — no manual key
- * management, and no multi-instance footgun: you can call `rememberImagePicker`
+ * management, and no multi-instance footgun: you can call `composeImagePicker`
  * twice in the same screen and the framework auto-disambiguates.
  *
  * @param authority FileProvider authority declared in the consumer's manifest.
@@ -52,12 +52,12 @@ import java.io.File
  * @param onMultiPicked Called with up to `maxItems` processed Uris after multi-pick.
  */
 @Composable
-fun rememberImagePicker(
+fun composeImagePicker(
     authority: String,
     config: ImagePickerConfig = ImagePickerConfig(),
     onPicked: (Uri) -> Unit = {},
     onMultiPicked: (List<Uri>) -> Unit = {},
-): ImagePickerComposeManager {
+): ComposeImagePickerManager {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Use the application context so the processor isn't tied to a transient
@@ -218,7 +218,7 @@ fun rememberImagePicker(
     }
 
     return remember {
-        ImagePickerComposeManager(
+        ComposeImagePickerManager(
             onCapture = {
                 val perms = mutableListOf(Manifest.permission.CAMERA)
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {

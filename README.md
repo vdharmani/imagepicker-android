@@ -10,7 +10,7 @@ Works in **Compose, Activities, and Fragments** with a single shared engine.
 
 ## Highlights
 
-- 🟢 **Compose-first API** (`rememberImagePicker`) plus a matching View-side
+- 🟢 **Compose-first API** (`composeImagePicker`) plus a matching View-side
   manager (`ImagePickerManager`) — same engine, same configuration.
 - 📷 Camera + system Photo Picker. No `READ_MEDIA_IMAGES` permission needed.
 - 🔁 Survives process death while the camera is open
@@ -59,10 +59,10 @@ dependencyResolutionManagement {
 ```kotlin
 dependencies {
     // Required: camera + gallery + compression + EXIF + downscale.
-    implementation("com.github.vdharmani.imagepicker-android:imagepicker-core:1.0.3")
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-core:1.0.4")
 
     // Optional: only if you want cropping. Adds uCrop transitively.
-    implementation("com.github.vdharmani.imagepicker-android:imagepicker-ucrop:1.0.3")
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-ucrop:1.0.4")
 }
 ```
 
@@ -114,7 +114,7 @@ That's the entire setup — no other resources, themes, or services to wire up.
 @Composable
 fun EditProfileScreen(onSaved: (Uri) -> Unit) {
     val context = LocalContext.current
-    val picker = rememberImagePicker(
+    val picker = composeImagePicker(
         authority = "${context.packageName}.provider",
         // Drop the cropHandler line to skip cropping.
         config = ImagePickerConfig(cropHandler = UCropHandler()),
@@ -128,11 +128,11 @@ fun EditProfileScreen(onSaved: (Uri) -> Unit) {
 }
 ```
 
-Result launchers registered inside `rememberImagePicker` are scoped to the
+Result launchers registered inside `composeImagePicker` are scoped to the
 current composition, so they're released automatically when the composable
 leaves the tree. The temporary camera URI is stored in `rememberSaveable`, so
 the result survives configuration changes **and** process death — no manual
-`stateKey` needed. You can call `rememberImagePicker` multiple times in the
+`stateKey` needed. You can call `composeImagePicker` multiple times in the
 same screen without collisions.
 
 ---
@@ -212,7 +212,7 @@ The Fragment constructor registers launchers against the Fragment's own
 
 ```kotlin
 var loading by remember { mutableStateOf(false) }
-val picker = rememberImagePicker(
+val picker = composeImagePicker(
     authority = "${context.packageName}.provider",
     config = ImagePickerConfig(onLoadingChanged = { loading = it }),
     onMultiPicked = { uris -> viewModel.addImages(uris) },
