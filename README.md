@@ -59,10 +59,10 @@ dependencyResolutionManagement {
 ```kotlin
 dependencies {
     // Required: camera + gallery + compression + EXIF + downscale.
-    implementation("com.github.vdharmani.imagepicker-android:imagepicker-core:1.0.4")
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-core:1.0.5")
 
     // Optional: only if you want cropping. Adds uCrop transitively.
-    implementation("com.github.vdharmani.imagepicker-android:imagepicker-ucrop:1.0.4")
+    implementation("com.github.vdharmani.imagepicker-android:imagepicker-ucrop:1.0.5")
 }
 ```
 

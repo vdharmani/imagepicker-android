@@ -10,7 +10,6 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,6 +26,7 @@ import androidx.core.net.toUri
 import com.vdharmani.imagepicker.CropHandler
 import com.vdharmani.imagepicker.ImagePickerConfig
 import com.vdharmani.imagepicker.ImageProcessor
+import com.vdharmani.imagepicker.MutableMaxPickMultipleVisualMedia
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -134,7 +134,11 @@ fun composeImagePicker(
     }
 
     // -- multi gallery --
-    val multiLauncher = rememberLauncherForActivityResult(PickMultipleVisualMedia()) { uris ->
+    // Use a mutable-max contract so the system Photo Picker UI itself caps
+    // selection at pickMultipleImages()'s `maxItems`, instead of letting the
+    // user pick the platform-default max and silently truncating after.
+    val multiContract = remember { MutableMaxPickMultipleVisualMedia() }
+    val multiLauncher = rememberLauncherForActivityResult(multiContract) { uris ->
         if (uris.isNullOrEmpty()) {
             config.onCancelled?.invoke()
             return@rememberLauncherForActivityResult
@@ -232,6 +236,7 @@ fun composeImagePicker(
             onPickMultiple = { max ->
                 if (max > 0) {
                     pendingMultiMax.intValue = max
+                    multiContract.maxItems = max
                     safeLaunch { multiLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly)) }
                 }
             },

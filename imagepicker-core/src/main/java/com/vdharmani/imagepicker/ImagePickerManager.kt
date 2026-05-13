@@ -14,7 +14,6 @@ import androidx.activity.result.ActivityResultCaller
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
@@ -139,6 +138,7 @@ class ImagePickerManager private constructor(
     private var tempCameraUri: Uri? = null
     private var isProcessing = false
     private var pendingMultiMax: Int = Int.MAX_VALUE
+    private val multiContract = MutableMaxPickMultipleVisualMedia()
 
     init {
         // Register the provider eagerly — safe to call any time before STARTED.
@@ -216,7 +216,7 @@ class ImagePickerManager private constructor(
         }
 
     private val pickMultiLauncher: ActivityResultLauncher<PickVisualMediaRequest> =
-        caller.registerForActivityResult(PickMultipleVisualMedia()) { uris ->
+        caller.registerForActivityResult(multiContract) { uris ->
             if (uris.isNullOrEmpty()) {
                 config.onCancelled?.invoke()
                 return@registerForActivityResult
@@ -273,14 +273,14 @@ class ImagePickerManager private constructor(
     }
 
     /**
-     * Launch the system Photo Picker for up to [maxItems] images.
-     *
-     * The picker registers with the platform's default max; we trim the
-     * returned list to [maxItems] before invoking [multiCallback].
+     * Launch the system Photo Picker for up to [maxItems] images. The picker
+     * UI enforces the cap; the returned list is also trimmed defensively
+     * before [multiCallback] runs.
      */
     fun pickMultipleImages(maxItems: Int) {
         if (maxItems <= 0) return
         pendingMultiMax = maxItems
+        multiContract.maxItems = maxItems
         safeLaunch {
             pickMultiLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly))
         }
